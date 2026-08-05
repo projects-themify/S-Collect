@@ -11,9 +11,13 @@ permissions:
 
 jobs:
 
+################################################################################
+# Detect changed applications
+################################################################################
+
   detect:
 
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
 
     outputs:
       client: ${{ steps.filter.outputs.client }}
@@ -34,16 +38,16 @@ jobs:
               - 'Admin/**'
 
 ################################################################################
-# CLIENT
+# Client CI
 ################################################################################
 
-  client:
+  client-ci:
 
     needs: detect
 
     if: needs.detect.outputs.client == 'true'
 
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
 
     defaults:
       run:
@@ -65,37 +69,22 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Lint
-        run: pnpm run lint || true
-
-      - uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
+        run: pnpm run lint
 
       - name: Build
-        run: |
-          docker build \
-            -t ghcr.io/${{ github.repository_owner }}/client:latest \
-            -t ghcr.io/${{ github.repository_owner }}/client:${{ github.sha }} \
-            ./Client
+        run: pnpm run build
 
-      - name: Push
-        run: |
-          docker push ghcr.io/${{ github.repository_owner }}/client:latest
-          docker push ghcr.io/${{ github.repository_owner }}/client:${{ github.sha }}
 ################################################################################
-# ADMIN
+# Admin CI
 ################################################################################
 
-  admin:
+  admin-ci:
 
     needs: detect
 
     if: needs.detect.outputs.admin == 'true'
 
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
 
     defaults:
       run:
@@ -117,21 +106,82 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Lint
-        run: pnpm run lint || true
+        run: pnpm run lint
+
+      - name: Build
+        run: pnpm run build
+
+################################################################################
+# Build & Push Client Image
+################################################################################
+
+  client-image:
+
+    needs:
+      - detect
+      - client-ci
+
+    if: needs.detect.outputs.client == 'true'
+
+    runs-on: self-hosted
+
+    steps:
+
+      - uses: actions/checkout@v5
 
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build
-        run: |
-          docker build \
-           -t ghcr.io/${{ github.repository_owner }}/client:latest \
-           -t ghcr.io/${{ github.repository_owner }}/client:${{ github.sha }} \
-            ./Client
 
-      - name: Push
-        run: |
-          docker push ghcr.io/${{ github.repository_owner }}/client:latest
-          docker push ghcr.io/${{ github.repository_owner }}/client:${{ github.sha }}
+      - name: Build & Push Client
+        uses: docker/build-push-action@v6
+        with:
+          context: ./Client
+          file: ./Client/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/client:latest
+            ghcr.io/${{ github.repository_owner }}/client:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+################################################################################
+# Build & Push Admin Image
+################################################################################
+
+  admin-image:
+
+    needs:
+      - detect
+      - admin-ci
+
+    if: needs.detect.outputs.admin == 'true'
+
+    runs-on: self-hosted
+
+    steps:
+
+      - uses: actions/checkout@v5
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & Push Admin
+        uses: docker/build-push-action@v6
+        with:
+          context: ./Admin
+          file: ./Admin/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/admin:latest
+            ghcr.io/${{ github.repository_owner }}/admin:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Remove dangling images
+        run: docker image prune -af
